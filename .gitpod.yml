@@ -1,0 +1,13 @@
+image:
+    file: Dockerfile
+#Firebase CLI , firebase login:ci --no-localhost 98978797897
+tasks:
+ - init:
+        touch logs.txt  &&
+         mkdir test
+ - command: >
+            npm install -g firebase-tools &&
+            npm install --save randomatic
+
+#firebase deploy --only functions --token 787897879
+#firebase deploy --only functions:randomNumber --token 18787987897
