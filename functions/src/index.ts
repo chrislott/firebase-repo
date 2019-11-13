@@ -102,6 +102,10 @@ exports.createStripeCharge = functions.firestore.document('tips/{id}').onCreate(
     const tip: any = snap.data();
         // Create a charge using the pushId as the idempotency key
         // protecting against double charges
+        await snap.ref.set({state:'CSP', status:'WAT'}, {
+            merge: true
+        })
+
         const amount = tip.amount;
         const corrency = 'USD';
         const source = '';
