@@ -14,11 +14,77 @@ const functions = require('firebase-functions');
 
 // The Firebase Admin SDK to access the Firebase Realtime Database.
 const admin = require('firebase-admin');
+const express = require('express');
+const cors = require('cors');
+const bodyParser = require('body-parser');
 const stripe = require('stripe')(functions.config().stripe.key);
 
 
 
 admin.initializeApp();
+
+const db = admin.firestore();
+
+const app = express();
+
+// Automatically allow cross-origin requests
+app.use(cors({ origin: true }));
+const main = express();
+
+main.use('/api/v1', app);
+main.use(bodyParser.json());
+
+
+export const webApi = functions.https.onRequest(main);
+
+app.get('/warmup', (request: any, response: any) => {
+    console.log('calling warmup');
+    response.send('Warming up friend.');
+
+});
+
+app.post('/charge', async (request: any, response: any) => {
+    let confim = 'test';
+    console.log('calling charge');
+    try {
+        const { token, tipId } = request.body;
+        console.log('calling charge with id: ', tipId);
+        console.log('calling charge with id: ', token);
+        const docRef = await db.collection('tips').doc(tipId);
+        await docRef.get().then((tip: any) => {
+            const amount = tip.data().amount * 100;
+            const currency = 'USD';
+            const source = '';
+            const idempotencyKey = tipId;
+            const charge = { amount, currency, source };
+            if (tip.data().source !== null) {
+                charge.source = tip.data().source.token.id;
+            }
+
+            stripe.charges.create(charge, { idempotency_key: idempotencyKey }).then(async (res: any) => {
+                confim = randomNumber();
+                res.confirmCode = confim;
+                await docRef.set(res, {
+                    merge: true
+                });
+                response.json({
+                    confirmCode: confim
+                });
+            }
+
+            );
+
+        }
+        );
+
+        // const data = { token, tipId };
+
+
+
+    } catch (error) {
+
+    }
+});
 
 
 // Take the text parameter passed to this HTTP endpoint and insert it into the
@@ -27,6 +93,7 @@ exports.chargeTip = functions.https.onRequest(async (req: any, res: any) => {
     // Grab the text parameter.
     //const original = 465;
 
+    console.log('res', res.toString());
 
 
     let mesRef = admin.firestore().collection(`messages`);
@@ -98,31 +165,75 @@ function randomNumber() {
     return random;
 };
 
+// async function createNewCode(): Promise<string> {
+//     var codesRef = admin.firestore().collection("codes");
+//     var randomize = require('randomatic');
+//     //const random = randomize('Aa0', 10);
+//     let random = randomize('0');
+//     random = random + randomize('A', 3);
+//     random = random + randomize('000');
+//     var query = codesRef.where("confirmCode", "==", random);
+//     const querySnapshot = await query.get();
+//     if (querySnapshot.size > 0) {
+//         random = randomNumber();
+//     }
+//     return random;
+// }
+
+function addNewCode() {
+    randomNumber().then((result: string) => {
+        admin.firestore().collection("codes").doc(result).set({
+            confirmCode: result,
+            tipId: '',
+            userd: false
+        })
+    }
+
+    )
+}
+
+async function getNotUsedCode() {
+    const codesRef = admin.firestore().collection("codes");
+    const query = codesRef.where("used", "==", false);
+    const querySnapshot = await query.get();
+
+    return querySnapshot.data().confirmCode;
+
+}
+
 exports.createStripeCharge = functions.firestore.document('tips/{id}').onCreate(async (snap: any, context: any) => {
-    const tip: any = snap.data();
-        // Create a charge using the pushId as the idempotency key
-        // protecting against double charges
-        await snap.ref.set({state:'CSP', status:'WAT'}, {
+    // const tip: any = snap.data();
+    // Create a charge using the pushId as the idempotency key
+    // protecting against double charges
+    console.log('data:', snap.data());
+    await snap.ref.set({ state: 'Calling Payment Processing', status: 'Waiting' }, {
+        merge: true
+    });
+    console.log('amount: ', snap.data().amount * 100);
+
+    const amount = snap.data().amount * 100;
+    const currency = 'USD';
+    const source = '';
+    const idempotencyKey = context.params.id;
+    const charge = { amount, currency, source };
+    if (snap.data().source !== null) {
+        charge.source = snap.data().source.token.id;
+    }
+
+
+    console.log('source: ', snap.data().source.token.id);
+    console.log('idempotency_key: ', idempotencyKey);
+
+    const confirmCode = await getNotUsedCode();
+    stripe.charges.create(charge, { idempotency_key: idempotencyKey }).then(async (res: any) => {
+
+        res.confirmCode = confirmCode;
+        snap.ref.set(res, {
             merge: true
         })
+    }
 
-        const amount = tip.amount;
-        const corrency = 'USD';
-        const source = '';
-        const idempotencyKey = tip.id;
-        const charge = { amount, corrency, source};
-        if (tip.source !== null) {
-            charge.source = tip.source.token.id;
-        }
-
-       const response =  stripe.charges.create( {
-           amount:1000,
-           corrency:'USD',
-           source: tip.source.token.id,
-           idempotency_key: idempotencyKey });
-
-        await snap.ref.set(response, {
-            merge: true
-        })
+    );
+    addNewCode();
 })
-;
+    ;
