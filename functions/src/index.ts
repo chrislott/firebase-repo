@@ -18,6 +18,7 @@ const express = require('express');
 const cors = require('cors');
 const bodyParser = require('body-parser');
 const stripe = require('stripe')(functions.config().stripe.key);
+const tipFee = 10;
 
 // Get the `FieldValue` object
 
@@ -31,8 +32,15 @@ const db = admin.firestore();
 
 const app = express();
 
+// var corsOptions = {
+//   origin: '*',
+//   optionsSuccessStatus: 200 // some legacy browsers (IE11, various SmartTVs) choke on 204 
+// }
+// app.use(cors(corsOptions));
+
 // Automatically allow cross-origin requests
 app.use(cors({ origin: true }));
+app.set('view engine', 'handlebars');
 const main = express();
 
 main.use('/api/v1', app);
@@ -62,6 +70,24 @@ app.post('/webhook', bodyParser.raw({ type: 'application/json' }), (request: any
             const paymentIntent = event.data.object;
             // Then define and call a method to handle the successful payment intent.
             // handlePaymentIntentSucceeded(paymentIntent);
+            const tipsRef = admin.firestore().collection("tips");
+
+            const query = tipsRef.where('payment_Intent', "==", paymentIntent.id);
+            query.get().then(function (querySnapshot: any) {
+                querySnapshot.forEach((element: any) => {
+                    console.log('tip id: ', element.id);
+                    tipsRef.doc(element.id).set({
+                        confirmCode: paymentIntent.metadata.confirmCode,
+                        status: 'succeeded',
+                        payment_intent_response: paymentIntent
+                    },
+                        {
+                            merge: true
+                        });
+                });
+            }).catch((error: any) => {
+                console.log('errr', error)
+            })
             console.log('succeded: ', paymentIntent)
             break;
         case 'payment_method.attached':
@@ -82,20 +108,37 @@ app.post('/webhook', bodyParser.raw({ type: 'application/json' }), (request: any
 });
 
 
-app.post('/intents', async (request: any, response: any) => {
-    const { amount } = request.body;
-    const { email } = request.body;
-    const { name } = request.body;
-    console.log('calling intents with email: ', email , ' name: ', name, ' amount: ', amount);
-    let confirmCode = "";
+app.post('/intents',async (request: any, response: any) => {
+
+    try {
+        
     
+    const { tip } = request.body; 
+    let amount = 0;
+    let email = '';
+    let name = '';
+    if(tip){
+         amount = tip.amount;
+        email  = tip.email;
+         name = tip.name;
+    }else{
+        amount = request.body;
+        email  = request.body;
+        name   = request.body;
+    }
+    // const { amount } = request.body;
+    // const { email } = request.body;
+    // const { name } = request.body;
+    console.log('calling intents with email: ', email, ' name: ', name, ' amount: ', amount);
+    let confirmCode = "";
+
     const confirmCodesRef = admin.firestore().collection(`confirmCodes`);
 
     const query = confirmCodesRef.where("used", "==", false).limit(1);
 
     await query.get().then((querySnapshot: any) => {
         querySnapshot.forEach(function (doc: any) {
-           
+
             console.log(doc.confirmCode, " => ", doc.data());
             confirmCode = doc.data().confirmCode;
 
@@ -133,6 +176,8 @@ app.post('/intents', async (request: any, response: any) => {
 
         const tipsRef = admin.firestore().collection(`tips`);
 
+        const tipFeeAmount = (amount * tipFee) / 100;
+
         tipsRef.add({
             client_secret: paymentIntent.client_secret,
             payment_Intent: paymentIntent.id,
@@ -140,8 +185,9 @@ app.post('/intents', async (request: any, response: any) => {
             currency: 'usd',
             tipperEmail: email,
             tipperName: name,
+            fee: tipFeeAmount,
             tipTime: admin.firestore.FieldValue.serverTimestamp(),
-            state: 'Calling Payment Processing', 
+            state: 'Calling Payment Processing',
             status: 'Waiting'
         }).then((doc: any) => {
             console.log("Document written with ID: ", doc.id);
@@ -152,6 +198,14 @@ app.post('/intents', async (request: any, response: any) => {
             secret: paymentIntent.client_secret,
             confirmCode: localConfirmCode
         });
+    }
+    } catch (error) {
+        console.log('error: ',error);
+        response.status(500);
+        response.send(500, {
+            message: error.message,
+            error: {}
+            });
     }
 
 });
@@ -363,62 +417,62 @@ function randomNumber() {
 
 
 
-function addNewCode() {
-    randomNumber().then((result: string) => {
-        admin.firestore().collection("codes").doc(result).set({
-            confirmCode: result,
-            tipId: '',
-            userd: false
-        })
-    }
+// function addNewCode() {
+//     randomNumber().then((result: string) => {
+//         admin.firestore().collection("codes").doc(result).set({
+//             confirmCode: result,
+//             tipId: '',
+//             userd: false
+//         })
+//     }
 
-    )
-}
+//     )
+// }
 
-async function getNotUsedCode() {
-    const codesRef = admin.firestore().collection("codes");
-    const query = codesRef.where("used", "==", false);
-    const querySnapshot = await query.get();
+// async function getNotUsedCode() {
+//     const codesRef = admin.firestore().collection("codes");
+//     const query = codesRef.where("used", "==", false);
+//     const querySnapshot = await query.get();
 
-    return querySnapshot.data().confirmCode;
+//     return querySnapshot.data().confirmCode;
 
-}
+// }
 //remove this
-exports.createStripeCharge = functions.firestore.document('tips/{id}').onCreate(async (snap: any, context: any) => {
-    // const tip: any = snap.data();
-    // Create a charge using the pushId as the idempotency key
-    // protecting against double charges
-    console.log('data:', snap.data());
-    await snap.ref.set({ state: 'Calling Payment Processing', status: 'Waiting' }, {
-        merge: true
-    });
-    console.log('amount: ', snap.data().amount * 100);
+// exports.createStripeCharge = functions.firestore.document('tips/{id}').onCreate(async (snap: any, context: any) => {
+//     // const tip: any = snap.data();
+//     // Create a charge using the pushId as the idempotency key
+//     // protecting against double charges
+//     console.log('data:', snap.data());
+//     await snap.ref.set({ state: 'Calling Payment Processing', status: 'Waiting' }, {
+//         merge: true
+//     });
+//     console.log('amount: ', snap.data().amount * 100);
 
-    const amount = snap.data().amount * 100;
-    const currency = 'USD';
-    const source = '';
-    const idempotencyKey = context.params.id;
-    const charge = { amount, currency, source };
-    if (snap.data().source !== null) {
-        charge.source = snap.data().source.token.id;
-    }
+//     const amount = snap.data().amount * 100;
+//     const currency = 'USD';
+//     const source = '';
+//     const idempotencyKey = context.params.id;
+//     const charge = { amount, currency, source };
+//     if (snap.data().source !== null) {
+//         charge.source = snap.data().source.token.id;
+//     }
 
 
-    console.log('source: ', snap.data().source.token.id);
-    console.log('idempotency_key: ', idempotencyKey);
+//     console.log('source: ', snap.data().source.token.id);
+//     console.log('idempotency_key: ', idempotencyKey);
 
-    const confirmCode = await getNotUsedCode();
-    stripe.charges.create(charge, { idempotency_key: idempotencyKey }).then(async (res: any) => {
+//     const confirmCode = await getNotUsedCode();
+//     stripe.charges.create(charge, { idempotency_key: idempotencyKey }).then(async (res: any) => {
 
-        res.confirmCode = confirmCode;
-        snap.ref.set(res, {
-            merge: true
-        })
-    }
+//         res.confirmCode = confirmCode;
+//         snap.ref.set(res, {
+//             merge: true
+//         })
+//     }
 
-    );
-    addNewCode();
-});
+//     );
+//     addNewCode();
+// });
 
 
 exports.scheduledFunction = functions.pubsub.schedule('every 60 minutes').onRun(async (context: any) => {
